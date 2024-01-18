@@ -1,0 +1,36 @@
+import console;
+import factory;
+import environment;
+import fsys;
+
+console.setTitle("pvm");
+var version = '0.0.2'
+
+//初始化基本目录 与 环境变量
+factory.init()
+
+try{
+	//监听输入
+	if(_ARGV.v || _ARGV.V){
+		console.log("当前版本： "+version );
+	}elseif(_ARGV.h || _ARGV.help){ //帮助
+		factory.help()
+	}elseif(_ARGV.l){ //帮助
+		factory.showLocalPhpList()
+	}elseif(_ARGV.s){ //显示线上版本
+		factory.searchVer(_ARGV.s)
+	}elseif(_ARGV.i){ //下载线上版本
+		factory.downVer(_ARGV.i)
+	}elseif(_ARGV.u){ //下载线上版本
+		factory.setUseVer(_ARGV.u)		
+	}else{
+		factory.help()	
+		console.pause(,"按任意键关闭")
+	}	
+}catch(e){
+	console.log(e)
+	console.pause(,"按任意键关闭")
+}
+
+
+

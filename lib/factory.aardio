@@ -1,0 +1,362 @@
+﻿namespace factory{
+	import console;
+	import io;
+	import environment;
+	import fsys;
+	import table;
+	import string;
+	import inet.http;
+	import preg;
+	import process;
+	import process.popen;
+	
+	var downDir = '/.download/'
+	var phpDir = '/php/'
+	var phpLinkDir = '/php_link'
+	
+	//帮助文档
+	help = function(){
+		console.log("Usage: pvm [options] [args...]");
+		console.log(" -h","    ","帮助菜单");
+		console.log(" -v","    ","应用版本号");
+		console.log(" -l","    ","显示本地安装的php列表");
+		console.log(" -s","[<ver>] [<-a>]","搜索在线php版本，输入8或者8.2。增加-a显示所有版本");
+		console.log(" -u","<ver>","设置本地php版本到环境变量");
+		console.log(" -i","<ver>","下载php版本到本地,可输入小版本自动获取当前小版本最新代码。输入8.2将下载8.2最新版本");
+		console.log(" ")
+		console.log("代码仓库地址:https://gitee.com/gqz1989/pvm,有意见或建议敬请反馈");
+		console.log(" ")
+	}
+	
+	//初始化目录
+	init = function(){
+		//设置默认目录
+		if(!io.exist(phpDir)){
+			io.createDir(phpDir)
+		}
+		if(!environment.system().get('PVM_HOME')){
+			environment.system().set('PVM_HOME',fsys.getCurDir())
+		}	
+	}
+	
+	//显示本地版本
+	showLocalPhpList = function(){
+		var currentVer = getCurentVer();
+		
+		var list = getLocalPhpList()
+		if(table.count(list)){
+			for( i,v in list ){
+				console.log(string.format(" %s "+v, currentVer == v ? '*':' ' ))
+				//console.log(currentVer == v ? '*':'',v) 
+			}
+		}else{
+			console.log('还未下载PHP')
+		}
+	}
+	
+	//获取本地已存在的版本（目录）
+	getLocalPhpList = function(){
+		import fsys;
+		
+		//要遍历的目录
+		var rootDir = "/php"; 
+		var verList = table.array();
+		//批量处理文件
+		fsys.enum( rootDir, //指定
+			"*.*", //指定查询文件名,支持通配符,也可以用一个数组指定多个查询文件名
+			function(dirname,filename,fullpath,findData){
+				//可使用 return false 退出枚举过程
+				if(filename){ }
+				else{
+					//table.append(verList, {dirname}) 
+					table.push(verList,dirname)
+					 //table.append(verList,dirname)
+				}
+			} ,false/*如果此参数为false则忽略子目录*/
+		);
+		return verList; 
+	}
+	//获取当前使用版本 
+	getCurentVer = function(){ //获取当前版本
+		var currentPath = environment.system().get('PVM_PHPVER')
+		if(!currentPath){
+			return  ''; 
+		}
+		return table.pop(string.split(currentPath,'\\'),1)) 
+	}
+	//设置使用版本
+	setUseVer = function(ver){ // 设置当前使用版本
+	
+		if(!preg("(\d+\.\d+)$").test(ver)){
+			console.log("请输入本地存在的版本。可以输入一个小版本或精确版本号,如：8.2或者8.2.8")
+			return false; 
+		}
+		
+		var list = getLocalPhpList()
+		if(table.len(list)==0){
+			console.log('还未下载PHP,请先下载')
+			return false; 
+		}
+		//兼容非纯数字版本 
+		var pregx = preg("(\d+\.\d+\.\d+)")
+		var verMap = {};
+		for(k,v in list){ //兼容非纯数字版本 
+			var verNoStr = pregx.match(v)
+			verMap[verNoStr] = v;
+		}
+		
+		allVerList = findVerList(ver,table.keys(verMap),"未检索到本地存在【%s】版本的php")
+		if(table.len(allVerList)<1){
+			return false; 
+		}
+		if(table.len(allVerList)>1){
+			allVerList = foldVerList(allVerList);	
+		}
+		//设置临时版本记录变量
+		environment.system().set('PVM_PHPVER',verMap[allVerList[1]])
+		
+		var phpPath = ..io.localpath(io.joinpath(phpDir , verMap[allVerList[1]]))
+		
+		var phpLinkPath = ..io.localpath('/php_link');
+		
+		fsys.delete(phpLinkPath);
+		
+		process.popen.cmd(string.format("mklink /D %s %s",phpLinkPath,phpPath))
+		
+		environment.system().set('PVM_PHPLINK',phpLinkPath)
+		
+		var pathEnv = environment.query("Path");
+		if(!string.indexOf(pathEnv,'%PVM_PHPLINK%')){
+			environment.system().set("Path",";%PVM_HOME%;%PVM_PHPLINK%;"+pathEnv);
+		}
+		//发送广播告知变量改变
+		::User32.SendMessageTimeoutW(0xFFFF/*_HWND_BROADCAST*/, 0x1A/*_WM_SETTINGCHANGE*/, null,"Environment",2/*_SMTO_ABORTIFHUNG*/,5000,null ); 
+		
+		console.log("环境变量设置成功")
+		
+	}
+	//检索可用版本列表
+	searchVer=function(ver){
+	
+		getVerList(function(verList){
+
+				var allVerList = table.keys(verList);
+				table.sort(allVerList)
+				if(ver!=''){
+					if(preg("(\d+|\d+\.\d+)$").test(ver)){
+							allVerList = findVerList(ver,allVerList)
+							if(table.len(allVerList)==0){
+								return false; 
+							}
+					}else{
+						console.log("输入的检索关键字有误，将显示所有版本")
+					}
+				}
+				if(!_ARGV.a){
+					allVerList = foldVerList(allVerList);
+				}
+				
+				for(k,v in allVerList ){
+					console.log(v)
+				}
+				
+			}
+		);
+	}
+	//下载php
+	downVer=function(ver){
+		if(!preg("(\d+\.\d+)$").test(ver)){
+			console.log("请输入一个小版本或精确版本号,如：8.2或者8.2.8")
+			return false; 
+		}
+		getVerList(function(verList){
+			var allVerList = table.keys(verList);
+			allVerList = findVerList(ver,allVerList)
+			if(table.len(allVerList)>1){
+				allVerList = foldVerList(allVerList);
+			}	
+			var downUrl = getDownUrl(allVerList[1],verList)
+			if(downUrl==''){
+				console.log(string.format("未匹配到【%s】版本的下载地址", ver))
+				return false; 	
+			}
+		    var filePath = downPhp(downUrl);
+		    phpInit(filePath)
+		    
+			
+		})
+	}
+	//获取对应版本号的链接
+	getDownUrl = function(ver,allVerMap){
+		for(k,v in allVerMap){
+			if(k == ver){
+				//return string.format('https://windows.php.net/downloads/releases/archives/%s',v); 
+				return v; 
+			}
+		}
+		return  ''; 
+	}
+	
+	//根据关键字检索列表
+	findVerList=function(key,verList,tip="未搜索到【%s】相关版本"){
+		var tmpArr = table.array();
+		for(k,v in verList){
+			if(string.startWith(v,key)){
+				table.push(tmpArr,v)
+			}
+		}
+		if(table.len(tmpArr)==0){
+			console.log(string.format(tip,key))
+    		console.pause();
+		}
+		return tmpArr; 
+	}
+	
+	
+	//折叠版本号列表 每个小版本只显示一个最新的
+	foldVerList = function(verList){
+		var tmpMap = {}
+		for(k,v in verList){
+			var tmp = string.split(v,'.');
+			var tmpVerNo = tmp[3] + 0
+			if(!tmpMap[tmp[1]+'.'+tmp[2]] || (tmpMap[tmp[1]+'.'+tmp[2]] && tmpMap[tmp[1]+'.'+tmp[2]] < tmpVerNo)){
+				tmpMap[tmp[1]+'.'+tmp[2]] = tmpVerNo
+			}
+		}
+		
+		var tmpArr = table.array();
+		for(k,v in tmpMap){
+			table.push(tmpArr,k+'.'+v)
+		}
+		table.sort(tmpArr)
+		return tmpArr;			
+	}
+	
+	//获取列表by缓存
+	getVerList=function(callback){
+		var verCache = string.load('/ver_cache')
+		if(verCache){
+			var cacheData = eval(verCache);
+			if(type(cacheData) == 'table'){
+				return callback(cacheData); 			
+			}
+		}
+		var verList = getVerListOnLine();
+		string.save('/ver_cache',table.tostring(verList))
+		return callback(verList); 
+	}
+	//获取在线版本列表
+	getVerListOnLine=function(){
+		//显示加载条
+		import console.progress; 
+		console.setLoadingDots({"   ";".  ";".. ";"...";"....";"......";interval=300},true);
+		
+		console.showLoading("获取最新PHP版本列表"); 
+			
+		//获取版本列表
+		var http = inet.http();
+		var html,err,errCode = http.get( "https://windows.php.net/downloads/releases/archives/?" );
+		http.close();
+		
+		if( html ){
+    		
+    		var urls = table.array()
+    		var verPreg = preg("php-(\d+\.\d+\.\d+)-nts-Win32-(vc|VC|vs|VS)(\d+)-x64.zip");
+    		var verPreg2 = preg("(\d+\.\d+\.\d+)");
+    		
+    		for scheme,host in string.gmatch(html,'HREF=\"(.*?)\"') {
+    			table.push(urls,scheme)
+			}
+			var allVer = verPreg.grep(urls)
+			
+			
+			var allVerMap = {};
+			for i,verStr  in allVer{
+				var verNoStr = verPreg2.match(verStr)
+				if(verNoStr){
+					allVerMap[verNoStr] = verStr;
+				}
+			}
+			return  allVerMap; 
+				
+		}else {
+    		if( http.statusCode ){
+        		//服务端返回错误信息
+        		console.log( http.lastResponse(), "HTTP错误代码:" + http.statusCode )
+    		}
+    		else{
+        		//本地内部错误
+        		console.log( err,errCode );
+    		}
+    		console.pause();
+    		console.close();
+		}
+	}
+	//下载php
+	downPhp=function(file){	
+		import inet.httpFile;
+		import math;
+		
+		var remoteFile = inet.httpFile( string.format('https://windows.php.net/downloads/releases/archives/%s',file),"/.download/")
+		
+		import console.progress;
+		var progress = console.progress();
+		progress.setProgress(0,"下载:"+file) 
+		
+		var ok,err,errCode = remoteFile.test()
+		if( ok ){
+			return file;
+			//return console.logPause("文件已下载完成、服务器未更新,无需重新下载"); 
+		}
+		elseif( ok === null ){
+			return console.logPause("下载错误,HTTP错误代码",remoteFile.statusCode,err);
+		}
+		
+		remoteFile.onReceiveBegin = function(statusCode,contentLength,fileSize){
+			if( statusCode == 206/*断点续传*/ ){
+				progress.setProgress((fileSize/contentLength)*100,"正在断点续传") 
+			}
+			elseif(fileSize){
+				progress.setProgress((fileSize/contentLength)*100,"正在重新下载")  
+			}
+		}
+		
+		remoteFile.onReceive = function(str,downSize,contentLength){
+			var process = (downSize/contentLength)*100
+			progress.addProgress(process,"下载:"+file+" 文件大小：" + math.size64(contentLength).format() )
+		}
+		
+		//下载文件
+		var ok,err,fileSize = remoteFile.download() 
+		if(err){
+			return console.log(err)
+		}
+		return file; 
+		//console.pause();
+	}
+	//php版本文件解压
+	phpInit = function(path){
+	
+		if(!io.exist(downDir+path)){
+			console.log('下载文件丢失,请清空.download目录重新下载')
+			return false;
+		}
+		var verNoStr = preg("(\d+\.\d+\.\d+)").match(path)
+
+		import zlib.unzip;
+		var ok,err = zlib.unzip.extract( downDir+path,phpDir+verNoStr,
+			function(fileName,extractPath,fileInfo,size,unitSize,unitName){
+				if( size !== null )
+					..console.log( "正在解压文件",fileName,size++ unitName );
+				else {
+					..console.log( "正在解压目录",fileName );
+				}
+				return true;
+			}
+		)
+		
+	}	
+	
+	
+	
+}
